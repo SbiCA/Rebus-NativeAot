@@ -12,10 +12,14 @@ var builder = WebApplication.CreateSlimBuilder(args);
 
 builder.Services.AddRebus(configure =>
 {
-    configure.Transport(t => t.UseInMemoryTransport(new InMemNetwork(),"my-queue"));
     configure.Options(o => o.RetryStrategy());
+    
+    // 👇 Use System.Text.Json with source generators no reflection based serialization!
     configure.Serialization(c => c.UseSystemTextJson( AppJsonSerializerContext.Default.Options));
     configure.Routing(r => r.TypeBased().Map<SimpleCommand>("my-queue"));
+    
+    // 👇 Use InMemoryTransport for testing
+    configure.Transport(t => t.UseInMemoryTransport(new InMemNetwork(),"my-queue"));
     return configure;
 });
 
@@ -46,13 +50,15 @@ todosApi.MapGet("/{id}", (int id) =>
 
 var cancellationToken = app.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping;
 var bus = app.Services.GetRequiredService<IBus>();
+
+// 👇 generate some messages
 _ = Sender(cancellationToken, bus, app.Services.GetRequiredService<ILogger<Program>>());
 app.Run();
 
 
 static async Task Sender(CancellationToken cancellationToken, IBus bus, ILogger<Program> logger)
 {
-    var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+    var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
     while (await timer.WaitForNextTickAsync(cancellationToken))
     {
         try
@@ -66,15 +72,9 @@ static async Task Sender(CancellationToken cancellationToken, IBus bus, ILogger<
     }
 }
 
-public record Todo(int Id, string? Title, DateOnly? DueBy = null, bool IsComplete = false);
-
-[JsonSerializable(typeof(Todo[]))]
-[JsonSerializable(typeof(SimpleCommand))]
-internal partial class AppJsonSerializerContext : JsonSerializerContext
-{
-}
 
 public record SimpleCommand(string Id, DateTime CreatedAt);
+
 public class MyHandler  : IHandleMessages<SimpleCommand>
 {
     private readonly ILogger<MyHandler> _logger;
@@ -90,3 +90,10 @@ public class MyHandler  : IHandleMessages<SimpleCommand>
         return Task.CompletedTask;
     }
 }
+
+public record Todo(int Id, string? Title, DateOnly? DueBy = null, bool IsComplete = false);
+
+[JsonSerializable(typeof(Todo[]))]
+// 👇 add type to serializer
+[JsonSerializable(typeof(SimpleCommand))]
+internal partial class AppJsonSerializerContext : JsonSerializerContext;
