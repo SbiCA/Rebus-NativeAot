@@ -1,11 +1,11 @@
-@Rebus.NativeAot_HostAddress = http://localhost:5053
+@HostAddress = http://localhost:5053
 
-GET {{Rebus.NativeAot_HostAddress}}/todos/
+GET {{HostAddress}}/todos/
 Accept: application/json
 
-###
+### request get todos
 
-GET {{Rebus.NativeAot_HostAddress}}/todos/1
+GET {{HostAddress}}/todos/1
 Accept: application/json
 
-###
+### request get todo by id
