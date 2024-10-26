@@ -1,0 +1,11 @@
+@Rebus.NativeAot_HostAddress = http://localhost:5053
+
+GET {{Rebus.NativeAot_HostAddress}}/todos/
+Accept: application/json
+
+###
+
+GET {{Rebus.NativeAot_HostAddress}}/todos/1
+Accept: application/json
+
+###
