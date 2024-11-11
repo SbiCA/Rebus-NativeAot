@@ -1,4 +1,8 @@
 using System.Text.Json.Serialization;
+using Amazon;
+using Amazon.Runtime;
+using Amazon.Runtime.CredentialManagement;
+using Amazon.SQS;
 using Rebus.Bus;
 using Rebus.Config;
 using Rebus.Handlers;
@@ -18,8 +22,15 @@ builder.Services.AddRebus(configure =>
     configure.Serialization(c => c.UseSystemTextJson( AppJsonSerializerContext.Default.Options));
     configure.Routing(r => r.TypeBased().Map<SimpleCommand>("my-queue"));
     
+    if (!new CredentialProfileStoreChain().TryGetAWSCredentials("ssyuser", out var credentials))
+    {
+        credentials = new EnvironmentVariablesAWSCredentials();
+    }
     // 👇 Use InMemoryTransport for testing
-    configure.Transport(t => t.UseInMemoryTransport(new InMemNetwork(),"my-queue"));
+    configure.Transport(t => 
+        // t.UseInMemoryTransport(new InMemNetwork(),"my-queue")
+        t.UseAmazonSQS( credentials,new AmazonSQSConfig {RegionEndpoint = RegionEndpoint.EUCentral1},  "my-demo-queue", new AmazonSQSTransportOptions { CreateQueues = true })
+        );
     return configure;
 });
 
