@@ -10,6 +10,7 @@ using Rebus.Retry.Simple;
 using Rebus.Routing.TypeBased;
 using Rebus.Serialization.Json;
 using Rebus.Transport.InMem;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
@@ -19,7 +20,7 @@ builder.Services.AddRebus(configure =>
     configure.Options(o => o.RetryStrategy());
     
     // 👇 Use System.Text.Json with source generators no reflection based serialization!
-    configure.Serialization(c => c.UseSystemTextJson( AppJsonSerializerContext.Default.Options));
+    configure.Serialization(c => c.UseSystemTextJson(AppJsonSerializerContext.Default.Options));
     configure.Routing(r => r.TypeBased().Map<SimpleCommand>("my-queue"));
     
     if (!new CredentialProfileStoreChain().TryGetAWSCredentials("ssyuser", out var credentials))
@@ -41,6 +42,26 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
 });
 
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, context, cancellationToken) =>
+    {
+        document.Info = new()
+        {
+            Title = "Rebus native AOT sample",
+            Version = "v1",
+            Description = """
+                          ## API for processing checkouts from cart
+                          
+                          some other content
+                          
+                          ## another section
+                          """
+        };
+        return Task.CompletedTask;
+    });
+});
+
 var app = builder.Build();
 
 var sampleTodos = new Todo[]
@@ -53,11 +74,55 @@ var sampleTodos = new Todo[]
 };
 
 var todosApi = app.MapGroup("/todos");
-todosApi.MapGet("/", () => sampleTodos);
-todosApi.MapGet("/{id}", (int id) =>
+todosApi.MapGet("/", () => sampleTodos)
+    .WithDescription("""
+                     # Get all todos
+                     
+                     some description
+                     
+                     here you go?
+                     """)
+    .Produces<Todo[]>(200)
+    .WithTags("Todos");
+
+todosApi.MapGet("/{id:int}", (int id) =>
     sampleTodos.FirstOrDefault(a => a.Id == id) is { } todo
         ? Results.Ok(todo)
-        : Results.NotFound());
+        : Results.NotFound())
+    .WithTags("Todos");
+
+todosApi.MapPost("/", (Todo todo) =>
+    {
+        sampleTodos = sampleTodos.Append(todo).ToArray();
+        return Results.Created($"/todos/{todo.Id}", todo);
+    })
+    .Produces<Todo>(201)
+    // 👇 exclude from API reference
+    // .ExcludeFromDescription()
+    .WithDescription("Create a new todo")
+    .WithTags("Todos");
+
+app.MapOpenApi();
+app.MapScalarApiReference(options =>
+{
+    
+    options.Title = """
+                    My custom API reference
+                    """;
+    
+    options.Theme = ScalarTheme.BluePlanet;
+    options.ShowSidebar = true;
+    options.DarkMode = true;
+    options.DefaultHttpClient = new KeyValuePair<ScalarTarget, ScalarClient>(ScalarTarget.CSharp, ScalarClient.HttpClient);
+    options.Authentication = new ScalarAuthenticationOptions
+    {
+        PreferredSecurityScheme = "ApiKey",
+        ApiKey = new ApiKeyOptions
+        {
+            Token = "my-api-key"
+        }
+    };
+});
 
 var cancellationToken = app.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping;
 var bus = app.Services.GetRequiredService<IBus>();
