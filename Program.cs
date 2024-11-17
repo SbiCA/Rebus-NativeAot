@@ -3,17 +3,19 @@ using Amazon;
 using Amazon.Runtime;
 using Amazon.Runtime.CredentialManagement;
 using Amazon.SQS;
+using Raven.Client.Documents;
 using Rebus.Bus;
 using Rebus.Config;
 using Rebus.Handlers;
 using Rebus.Retry.Simple;
 using Rebus.Routing.TypeBased;
 using Rebus.Serialization.Json;
-using Rebus.Transport.InMem;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+
+builder.Services.AddRavenDb(builder.Configuration);
 
 builder.Services.AddRebus(configure =>
 {
@@ -64,17 +66,21 @@ builder.Services.AddOpenApi(options =>
 
 var app = builder.Build();
 
-var sampleTodos = new Todo[]
-{
-    new(1, "Walk the dog"),
-    new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),
-    new(3, "Do the laundry", DateOnly.FromDateTime(DateTime.Now.AddDays(1))),
-    new(4, "Clean the bathroom"),
-    new(5, "Clean the car", DateOnly.FromDateTime(DateTime.Now.AddDays(2)))
-};
+// var sampleTodos = new Todo[]
+// {
+//     new(1, "Walk the dog"),
+//     new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),
+//     new(3, "Do the laundry", DateOnly.FromDateTime(DateTime.Now.AddDays(1))),
+//     new(4, "Clean the bathroom"),
+//     new(5, "Clean the car", DateOnly.FromDateTime(DateTime.Now.AddDays(2)))
+// };
 
 var todosApi = app.MapGroup("/todos");
-todosApi.MapGet("/", () => sampleTodos)
+todosApi.MapGet("/", (IDocumentStore store) =>
+    {
+        using var session = store.OpenAsyncSession();
+        return session.Query<Todo>().ToListAsync();
+    })
     .WithDescription("""
                      # Get all todos
                      
@@ -85,15 +91,22 @@ todosApi.MapGet("/", () => sampleTodos)
     .Produces<Todo[]>(200)
     .WithTags("Todos");
 
-todosApi.MapGet("/{id:int}", (int id) =>
-    sampleTodos.FirstOrDefault(a => a.Id == id) is { } todo
-        ? Results.Ok(todo)
-        : Results.NotFound())
+todosApi.MapGet("/{id:int}", async (int id, IDocumentStore store) =>
+    {
+        using var session = store.OpenAsyncSession();
+
+        var todo = await session.Query<Todo>().FirstOrDefaultAsync(a => a.Id == id);
+        return todo != null
+            ? Results.Ok(todo)
+            : Results.NotFound();
+    })
     .WithTags("Todos");
 
-todosApi.MapPost("/", (Todo todo) =>
+todosApi.MapPost("/", async (Todo todo, IDocumentStore store) =>
     {
-        sampleTodos = sampleTodos.Append(todo).ToArray();
+        using var session = store.OpenAsyncSession();
+        await session.StoreAsync(todo);
+        await session.SaveChangesAsync();
         return Results.Created($"/todos/{todo.Id}", todo);
     })
     .Produces<Todo>(201)
