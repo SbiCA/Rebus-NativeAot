@@ -3,23 +3,26 @@ using Amazon;
 using Amazon.Runtime;
 using Amazon.Runtime.CredentialManagement;
 using Amazon.SQS;
+using Raven.Client.Documents;
 using Rebus.Bus;
 using Rebus.Config;
 using Rebus.Handlers;
 using Rebus.Retry.Simple;
 using Rebus.Routing.TypeBased;
 using Rebus.Serialization.Json;
-using Rebus.Transport.InMem;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+
+builder.Services.AddRavenDb(builder.Configuration);
 
 builder.Services.AddRebus(configure =>
 {
     configure.Options(o => o.RetryStrategy());
     
     // 👇 Use System.Text.Json with source generators no reflection based serialization!
-    configure.Serialization(c => c.UseSystemTextJson( AppJsonSerializerContext.Default.Options));
+    configure.Serialization(c => c.UseSystemTextJson(AppJsonSerializerContext.Default.Options));
     configure.Routing(r => r.TypeBased().Map<SimpleCommand>("my-queue"));
     
     if (!new CredentialProfileStoreChain().TryGetAWSCredentials("ssyuser", out var credentials))
@@ -41,23 +44,98 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
 });
 
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, context, cancellationToken) =>
+    {
+        document.Info = new()
+        {
+            Title = "Rebus native AOT sample",
+            Version = "v1",
+            Description = """
+                          ## API for processing checkouts from cart
+                          
+                          some other content
+                          
+                          ## another section
+                          """
+        };
+        return Task.CompletedTask;
+    });
+});
+
 var app = builder.Build();
 
-var sampleTodos = new Todo[]
-{
-    new(1, "Walk the dog"),
-    new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),
-    new(3, "Do the laundry", DateOnly.FromDateTime(DateTime.Now.AddDays(1))),
-    new(4, "Clean the bathroom"),
-    new(5, "Clean the car", DateOnly.FromDateTime(DateTime.Now.AddDays(2)))
-};
+// var sampleTodos = new Todo[]
+// {
+//     new(1, "Walk the dog"),
+//     new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),
+//     new(3, "Do the laundry", DateOnly.FromDateTime(DateTime.Now.AddDays(1))),
+//     new(4, "Clean the bathroom"),
+//     new(5, "Clean the car", DateOnly.FromDateTime(DateTime.Now.AddDays(2)))
+// };
 
 var todosApi = app.MapGroup("/todos");
-todosApi.MapGet("/", () => sampleTodos);
-todosApi.MapGet("/{id}", (int id) =>
-    sampleTodos.FirstOrDefault(a => a.Id == id) is { } todo
-        ? Results.Ok(todo)
-        : Results.NotFound());
+todosApi.MapGet("/", (IDocumentStore store) =>
+    {
+        using var session = store.OpenAsyncSession();
+        return session.Query<Todo>().ToListAsync();
+    })
+    .WithDescription("""
+                     # Get all todos
+                     
+                     some description
+                     
+                     here you go?
+                     """)
+    .Produces<Todo[]>(200)
+    .WithTags("Todos");
+
+todosApi.MapGet("/{id:int}", async (int id, IDocumentStore store) =>
+    {
+        using var session = store.OpenAsyncSession();
+
+        var todo = await session.Query<Todo>().FirstOrDefaultAsync(a => a.Id == id);
+        return todo != null
+            ? Results.Ok(todo)
+            : Results.NotFound();
+    })
+    .WithTags("Todos");
+
+todosApi.MapPost("/", async (Todo todo, IDocumentStore store) =>
+    {
+        using var session = store.OpenAsyncSession();
+        await session.StoreAsync(todo);
+        await session.SaveChangesAsync();
+        return Results.Created($"/todos/{todo.Id}", todo);
+    })
+    .Produces<Todo>(201)
+    // 👇 exclude from API reference
+    // .ExcludeFromDescription()
+    .WithDescription("Create a new todo")
+    .WithTags("Todos");
+
+app.MapOpenApi();
+app.MapScalarApiReference(options =>
+{
+    
+    options.Title = """
+                    My custom API reference
+                    """;
+    
+    options.Theme = ScalarTheme.BluePlanet;
+    options.ShowSidebar = true;
+    options.DarkMode = true;
+    options.DefaultHttpClient = new KeyValuePair<ScalarTarget, ScalarClient>(ScalarTarget.CSharp, ScalarClient.HttpClient);
+    options.Authentication = new ScalarAuthenticationOptions
+    {
+        PreferredSecurityScheme = "ApiKey",
+        ApiKey = new ApiKeyOptions
+        {
+            Token = "my-api-key"
+        }
+    };
+});
 
 var cancellationToken = app.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping;
 var bus = app.Services.GetRequiredService<IBus>();
